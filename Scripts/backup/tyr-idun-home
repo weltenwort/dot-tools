@@ -1,0 +1,87 @@
+#!/bin/bash
+
+set -euo pipefail
+IFS=$'\n\t'
+
+readonly BORG_REPO="${BORG_REPO:-/run/user/1000/gvfs/smb-share:server=idun,share=home/backups/borg-tyr}"
+readonly BORG_PASSPHRASE="$(pass show felix/private/backup/tyr-idun)"
+readonly ARCHIVE_PREFIX="{hostname}-home-"
+
+assert_repo_exists() {
+  if [[ -d "${BORG_REPO}" ]]; then
+    echo "Using repository '${BORG_REPO}' with archive prefix '${ARCHIVE_PREFIX}'..."
+  else
+    echo "Failed to locate repository '${BORG_REPO}'."
+    exit 1
+  fi
+}
+
+assert_passphrase_set() {
+  if [[ -z "${BORG_PASSPHRASE}" ]]; then
+    echo "Failed to read passphrase."
+    exit 1
+  fi
+}
+
+create_backup() {
+  export BORG_PASSPHRASE
+  borg create \
+    --verbose \
+    --stats \
+    --progress \
+    --compression=lz4 \
+    "${BORG_REPO}::${ARCHIVE_PREFIX}{now:%Y%m%d}" \
+    "${HOME}/.gnupg" \
+    "${HOME}/.ssh" \
+    "${HOME}/.thunderbird" \
+    "${HOME}/.timewarrior" \
+    "${HOME}/Documents" \
+    "${HOME}/Sync/wallet"
+}
+
+prune_backups() {
+  export BORG_PASSPHRASE
+  borg prune \
+    --verbose \
+    --list \
+    --prefix "${ARCHIVE_PREFIX}" \
+    --keep-daily=7 \
+    --keep-weekly=4 \
+    --keep-monthly=12 \
+    --keep-yearly=-1 \
+    "${@}" \
+    "${BORG_REPO}"
+}
+
+check_repo() {
+  export BORG_PASSPHRASE
+  borg check \
+    --verbose \
+    "${BORG_REPO}"
+}
+
+ask_to_continue() {
+  read -r -p "${1:-Continue?} [y/N] " response
+  case "$response" in
+    [yY][eE][sS]|[yY]) 
+      true
+      ;;
+    *)
+      false
+      ;;
+  esac
+}
+
+main() {
+  assert_repo_exists
+  assert_passphrase_set
+  create_backup
+  echo "Checking repository..."
+  check_repo
+  echo "Pruning archives..."
+  prune_backups --dry-run
+  ask_to_continue "Continue pruning?"
+  prune_backups
+}
+
+main
